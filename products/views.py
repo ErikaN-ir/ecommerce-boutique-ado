@@ -1,89 +1,69 @@
-from django.shortcuts import render, redirect, reverse, HttpResponse
+from django.shortcuts import render, redirect, reverse, get_object_or_404
 from django.contrib import messages
+from django.db.models import Q
+from django.db.models.functions import Lower
 
-from products.models import Product
+from .models import Product, Category
 
 # Create your views here.
 
-def view_bag(request):
-    """ A view that renders the bag contents page """
+def all_products(request):
+    """ A view to show all products, including sorting and search queries """
 
-    return render(request, 'bag/bag.html')
+    products = Product.objects.all()
+    query = None
+    categories = None
+    sort = None
+    direction = None
 
-def add_to_bag(request, item_id):
-    """ Add a quantity of the specified product to the shopping bag """
+    if request.GET:
+        if 'sort' in request.GET:
+            sortkey = request.GET['sort']
+            sort = sortkey
+            if sortkey == 'name':
+                sortkey = 'lower_name'
+                products = products.annotate(lower_name=Lower('name'))
+            if sortkey == 'category':
+                sortkey = 'category__name'
+            if 'direction' in request.GET:
+                direction = request.GET['direction']
+                if direction == 'desc':
+                    sortkey = f'-{sortkey}'
+            products = products.order_by(sortkey)
+            
+        if 'category' in request.GET:
+            categories = request.GET['category'].split(',')
+            products = products.filter(category__name__in=categories)
+            categories = Category.objects.filter(name__in=categories)
 
-    product = Product.objects.get(pk=item_id)
-    quantity = int(request.POST.get('quantity'))
-    redirect_url = request.POST.get('redirect_url')
-    size = None
-    if 'product_size' in request.POST:
-        size = request.POST['product_size']
-    bag = request.session.get('bag', {})
+        if 'q' in request.GET:
+            query = request.GET['q']
+            if not query:
+                messages.error(request, "You didn't enter any search criteria!")
+                return redirect(reverse('products'))
+            
+            queries = Q(name__icontains=query) | Q(description__icontains=query)
+            products = products.filter(queries)
 
-    if size:
-        if item_id in list(bag.keys()):
-            if size in bag[item_id]['items_by_size'].keys():
-                bag[item_id]['items_by_size'][size] += quantity
-            else:
-                bag[item_id]['items_by_size'][size] = quantity
-        else:
-            bag[item_id] = {'items_by_size': {size: quantity}}
-    else:
-        if item_id in list(bag.keys()):
-            bag[item_id] += quantity
-        else:
-            bag[item_id] = quantity
-            messages.success(request, f'Added {product.name} to your bag')
+    current_sorting = f'{sort}_{direction}'
 
-    request.session['bag'] = bag
-    return redirect(redirect_url)
-    
+    context = {
+        'products': products,
+        'search_term': query,
+        'current_categories': categories,
+        'current_sorting': current_sorting,
+    }
 
-def adjust_bag(request, item_id):
-    """Adjust the quantity of the specified product to the specified amount"""
-
-    quantity = int(request.POST.get('quantity'))
-    size = None
-    if 'product_size' in request.POST:
-        size = request.POST['product_size']
-    bag = request.session.get('bag', {})
-
-    if size:
-        if quantity > 0:
-            bag[item_id]['items_by_size'][size] = quantity
-        else:
-            del bag[item_id]['items_by_size'][size]
-            if not bag[item_id]['items_by_size']:
-                bag.pop(item_id)
-    else:
-        if quantity > 0:
-            bag[item_id] = quantity
-        else:
-            bag.pop(item_id)
-
-    request.session['bag'] = bag
-    return redirect(reverse('view_bag'))
+    return render(request, 'products/products.html', context)
 
 
-def remove_from_bag(request, item_id):
-    """Remove the item from the shopping bag"""
+def product_detail(request, product_id):
+    """ A view to show individual product details """
 
-    try:
-        size = None
-        if 'product_size' in request.POST:
-            size = request.POST['product_size']
-        bag = request.session.get('bag', {})
+    product = get_object_or_404(Product, pk=product_id)
 
-        if size:
-            del bag[item_id]['items_by_size'][size]
-            if not bag[item_id]['items_by_size']:
-                bag.pop(item_id)
-        else:
-            bag.pop(item_id)
+    context = {
+        'product': product,
+    }
 
-        request.session['bag'] = bag
-        return HttpResponse(status=200)
-
-    except Exception as e:
-        return HttpResponse(status=500)
+    return render(request, 'products/product_detail.html', context)
